@@ -1,6 +1,6 @@
 import { useSyncedStore, } from "@syncedstore/react";
 import { getRandomWords } from "./words";
-import { store, Events, Player, connect, local, Event, initialState, delays, ExtractPaload } from "~/constants/game";
+import { store, Events, Player, connect, local, Event, initialState, delays, ExtractPaload, Payload, EventName } from "~/constants/game";
 import { observeDeep } from "@syncedstore/core";
 
 function oneOf<T>(items: T[]){
@@ -8,11 +8,10 @@ function oneOf<T>(items: T[]){
 }
 
 
-type Guard = keyof ReturnType<typeof guards>;
+type Guard = keyof typeof guards;
 
 const is = (guard: Guard) => {
-    const conds = guards(store.state); 
-    const cond = conds[guard]
+    const cond = guards[guard]
     return cond ? cond() : false
 };
 
@@ -25,26 +24,45 @@ function repeat(params: {run: () => void, every: number, untill: Guard, delay?: 
     }, params.delay || params.every)
 }
 
-const guards = (state: typeof store.state) => ({
-    "round_running": () => state.value === "game.running" && state.context.remainingTime > 0,
-    "game_running": () => state.value === "game.running",
-    "myturn": () =>  state.context.currentDrawer === local.atom.get().id,
-    "leaderboard": () => state.value == "game.round_ended" || state.value == "done",
-    "lobby": () => state.value === "lobby",
-    "owner": () => state.context.owner === local.atom.get().id,
-    "all_guessed": () => Object.entries(state.context.players).filter(([id, _])=>id !== state.context.currentDrawer).every(([_, p])=>p.guessed),
-    "time_up": () => state.context.remainingTime <= 0,
-    "round_over": () =>  state.value === "game.round_ended",
-    "word_choosing": ()=> state.value === "game.word_choosing",
-    "rounds_not_over": ()=> state.context.roundsLeft > 0,
-    "has_players": () => Object.keys(state.context.players).length > 0,
-    "enough_players": () => Object.keys(state.context.players).length > 1,
-    "room_not_full": () => Object.keys(state.context.players).length >= state.context.config.maxPlayers,
-    "has_owner" : () => state.context.owner !== "",
-    "word_choosing_ruuning": () => state.context.word_choosing_time > 0,
-    "game_over": () => state.value === "done",
-    "owner_in_room": () =>  Object.keys(state.context.players).includes(state.context.owner),
-}) as const; 
+
+const send = (event: Event) => {
+    const action = actions[event.type];
+    const { type, ...payload } = event; 
+    if (!action) {
+      throw new Error(`Unknown event type: ${event.type}`);
+    }
+    // @ts-ignore
+    action({ payload });
+}
+
+
+
+const waitFor = (delay: ((keyof typeof delays) | number), cb: () => void) => {
+    const time = (typeof delay === "string") ? delays[delay] : delay;
+    return setTimeout(cb, time)
+}
+
+
+const guards = {
+    "round_running": () => store.state.value === "game.running" && store.state.context.remainingTime > 0,
+    "game_running": () => store.state.value === "game.running",
+    "myturn": () =>  store.state.context.currentDrawer === local.atom.get().id,
+    "leaderboard": () => store.state.value == "game.round_ended" || store.state.value == "done",
+    "lobby": () => store.state.value === "lobby",
+    "owner": () => store.state.context.owner === local.atom.get().id,
+    "all_guessed": () => Object.entries(store.state.context.players).filter(([id, _])=>id !== store.state.context.currentDrawer).every(([_, p])=>p.guessed),
+    "time_up": () => store.state.context.remainingTime <= 0,
+    "round_over": () =>  store.state.value === "game.round_ended",
+    "word_choosing": ()=> store.state.value === "game.word_choosing",
+    "rounds_not_over": ()=> store.state.context.roundsLeft > 0,
+    "has_players": () => Object.keys(store.state.context.players).length > 0,
+    "enough_players": () => Object.keys(store.state.context.players).length > 1,
+    "room_not_full": () => Object.keys(store.state.context.players).length >= store.state.context.config.maxPlayers,
+    "has_owner" : () => store.state.context.owner !== "",
+    "word_choosing_ruuning": () => store.state.context.word_choosing_time > 0,
+    "game_over": () => store.state.value === "done",
+    "owner_in_room": () =>  Object.keys(store.state.context.players).includes(store.state.context.owner),
+} as const; 
 
 
 const actions: Events =  {
@@ -88,7 +106,6 @@ const actions: Events =  {
         const MAX_SCORE = 300;
         const EXPONENT = Math.log(BASE_SCORE/MAX_SCORE) / -ROUND_TIME;
 
-        
         if (nguessers === 0) {
             // @ts-ignore
             store.state.context.players[store.state.context.currentDrawer].increase = -BASE_SCORE;
@@ -115,7 +132,7 @@ const actions: Events =  {
             p.increase -= unit
             p.score += unit
         })
-},
+    },
     update_drawer: () => {
         const keys = Object.keys(store.state.context.players)
         const drawerIndex = keys.findIndex((id)=>id === store.state.context.currentDrawer);
@@ -129,8 +146,8 @@ const actions: Events =  {
             player.drawingRating = undefined;
             player.timeStamp = undefined;
         })
-        // @ts-ignore
 
+        // @ts-ignore
         const drawer = store.state.context.players[store.state.context.currentDrawer] as Player;
         drawer.guessed = true;
     },
@@ -144,7 +161,7 @@ const actions: Events =  {
             untill: "word_choosing_ruuning",
             delay: 1000
         })
-        waitFor("leaderboard")(()=>{
+        waitFor("leaderboard", ()=>{
             send ({ type: is("rounds_not_over") ? "start_word_choosing" : "end_game" })
         })
         store.state.value = "game.round_ended";
@@ -165,7 +182,7 @@ const actions: Events =  {
         connect(payload.roomId);
         store.state.context.players[payload.id] = { name: payload.name, avatar: payload.avatar, score: 0, guessed: false, increase: 0 };
     },
-    leave: ({ payload }) => {
+    leave: () => {
         const id = local.get("id");
         const isOwner = store.state.context.owner === id;
         if (isOwner) {
@@ -210,21 +227,6 @@ const actions: Events =  {
     }
 }
 
-const send = (event: Event) => {
-    const action = actions[event.type];
-    const { type, ...payload } = event; 
-    if (!action) {
-      throw new Error(`Unknown event type: ${event.type}`);
-    }
-    // @ts-ignore
-    action({ payload });
-}
-
-const waitFor = (delay: ((keyof typeof delays) | number) ) => {
-    const time = (typeof delay === "string") ? delays[delay] : delay;
-    return (cb: () => void) =>  setTimeout(cb, time)
-}
-
 const rules: Record<string, () => boolean> = {
     "ENSURE_PLAYERS_COUNT": () => {
         if (!is("lobby") && !is("enough_players")) {
@@ -257,7 +259,7 @@ const rules: Record<string, () => boolean> = {
     },
     "ENSURE_DESTROYED": () => {
         if (!is("has_players")) {
-            waitFor(5000)(()=>{
+            waitFor(5000, ()=>{
                 if (!is("has_players")) {
                     send({ type: "remove_room" });
                 }
@@ -279,13 +281,6 @@ observeDeep(store, ()=>{
 
 export const useGameSyncedStore = () => {
     const { state } = useSyncedStore(store);
-    
-    const is = (key: Guard) => {
-        const conds = guards(state); 
-        const cond = conds[key]
-        return cond ? cond() : false
-    };
     const me = local.use();
-
     return {state, send, me, is} as const;
 };

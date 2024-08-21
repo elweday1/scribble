@@ -137,12 +137,19 @@ export type Event = (
 )
 
 
-type EventName = Event["type"]
+
+type Empty = Record<any, never>;
+
+export type EventName = Event["type"]
 export type ExtractPaload<T extends EventName> = Omit<Extract<Event, { type: T }>, "type">;
+
+export type Payload<T extends EventName> = ExtractPaload<T> extends Empty ? undefined : ExtractPaload<T>
+
+
 export type Events = Partial<{
     [K in EventName]: (
         cb: {
-            payload: ExtractPaload<K>,
+            payload: Payload<K>,
         }) => void
 }>
 
