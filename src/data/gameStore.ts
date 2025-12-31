@@ -95,19 +95,26 @@ const actions: Events = {
   },
 
   start_game: ({ payload }) => {
+    console.log("Action: start_game triggered", payload);
     store.state.context.gameId = payload.gameId;
-    store.state.context.currentDrawer = Object.keys(
-      store.state.context.players,
-    )[0] as string;
+    // Set first player as drawer explicitly
+    const players = Object.keys(store.state.context.players);
+    console.log("Players found:", players);
+
+    if (players.length > 0) {
+      store.state.context.currentDrawer = players[0];
+    } else {
+      console.warn("No players to assign drawer!");
+    }
+
     store.state.context.roundsLeft = store.state.context.config.rounds;
     store.state.context.remainingTime = store.state.context.config.roundTime;
     Object.values(store.state.context.players).map((p) => (p.score = 0));
     store.state.context.guesses = [];
-    repeat({
-      run: () => send({ type: "decrement_time" }),
-      every: 1000,
-      until: "game_over",
-    });
+
+    // Timer is now handled by the global interval
+
+    console.log("Sending start_word_choosing...");
     send({ type: "start_word_choosing" });
   },
   end_game: () => {
@@ -194,20 +201,13 @@ const actions: Events = {
     send({ type: "calculate_increase" });
     send({ type: "update_drawer" });
     send({ type: "reset_players" });
-    repeat({
-      run: () => send({ type: "update_scores" }),
-      every: 20,
-      until: "word_choosing_running",
-      delay: 1000,
-    });
-    waitFor("leaderboard", () => {
-      send({
-        type: is("rounds_not_over") ? "start_word_choosing" : "end_game",
-      });
-    });
+    send({ type: "calculate_increase" });
+    send({ type: "update_drawer" });
+    send({ type: "reset_players" });
+
+    // Set leaderboard time for the countdown
+    store.state.context.leaderboard_time = delays.leaderboard / 1000;
     store.state.value = "game.round_ended";
-    // roundsLeft is now updated in update_drawer
-    // store.state.context.roundsLeft -= 1;
     store.state.context.remainingTime = store.state.context.config.roundTime;
   },
   choose_word: ({ payload }) => {
@@ -227,22 +227,27 @@ const actions: Events = {
       return;
     }
     // Also prevent joining if game is already running (optional but robust)
+    // Prevent joining if game is running is optional
     if (store.state.value.startsWith("game.")) {
-      // For now allow joining but they might need to wait or handle mid-game join
-      // If we block, they can't play. Best to allow and let them be spectators or wait for next round?
-      // Existing logic adds them to players map.
-      // If they join, update_drawer might include them next time.
-      // Robustness: fine to allow join.
+      // Allow join for now
     }
-    local.set("id", payload.id);
-    connect(payload.roomId);
-    store.state.context.players[payload.id] = {
-      name: payload.name,
-      avatar: payload.avatar,
-      score: 0,
-      guessed: false,
-      increase: 0,
-    };
+
+    // Check if player already exists
+    if (!store.state.context.players[payload.id]) {
+      local.set("id", payload.id);
+      connect(payload.roomId);
+      store.state.context.players[payload.id] = {
+        name: payload.name,
+        avatar: payload.avatar,
+        score: 0,
+        guessed: false,
+        increase: 0,
+      };
+    } else {
+      // Just connect to sync
+      local.set("id", payload.id);
+      connect(payload.roomId);
+    }
   },
   leave: () => {
     const id = local.get("id");
@@ -256,6 +261,8 @@ const actions: Events = {
     Object.hasOwn(store.state.context.players, id)
       ? delete store.state.context.players[id]
       : null;
+    // Do NOT disconnect, as this resets the syncedStore state for other components?
+    // Actually disconnect is fine but we should be careful about state access after.
     local.get("conn")?.disconnect();
   },
   rate_drawing: ({ payload }) => {
@@ -279,18 +286,37 @@ const actions: Events = {
     }
   },
   decrement_time: () => {
+    // Throttle checks
+    const THROTTLE_MS = 900;
+    const now = Date.now();
+    if (now - store.state.context.lastTick < THROTTLE_MS) {
+      return;
+    }
+
+    // Update Tick
+    store.state.context.lastTick = now;
+
     if (is("round_running")) {
       store.state.context.remainingTime -= 1;
     }
     if (is("word_choosing") && is("word_choosing_running")) {
       store.state.context.word_choosing_time -= 1;
     }
+    // New logic for leaderboard countdown
+    if (
+      store.state.value === "game.round_ended" &&
+      store.state.context.leaderboard_time > 0
+    ) {
+      store.state.context.leaderboard_time -= 1;
+    }
   },
   start_word_choosing: () => {
+    console.log("Action: start_word_choosing triggered");
     const context = store.state.context;
     context.wordOptions = getRandomWords(3);
     context.word_choosing_time = delays.word_choosing / 1000;
     store.state.value = "game.word_choosing";
+    console.log("State value set to game.word_choosing");
   },
   remove_room: () => {
     const conn = local.get("conn");
@@ -299,8 +325,24 @@ const actions: Events = {
   },
 };
 
+// Ensure owner is set immediately if null to avoid race conditions
+const ensureOwner = () => {
+  const state = store.state;
+  // If we have players but no owner, or owner is not in list
+  if (Object.keys(state.context.players).length > 0) {
+    if (!state.context.owner || !state.context.players[state.context.owner]) {
+      // Assign new owner
+      state.context.owner = Object.keys(state.context.players)[0];
+    }
+  }
+};
+
 const rules: Record<string, () => boolean> = {
   ENSURE_PLAYERS_COUNT: () => {
+    // Only run if we are synced to avoid wiping state on load
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
     if (!is("lobby") && !is("enough_players")) {
       store.state.value = "lobby";
       return true;
@@ -308,6 +350,11 @@ const rules: Record<string, () => boolean> = {
     return false;
   },
   ENSURE_OWNER: () => {
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
+    ensureOwner(); // Helper called
+    // Original logic
     if (is("has_players") && (!is("has_owner") || !is("owner_in_room"))) {
       store.state.context.owner = Object.keys(
         store.state.context.players,
@@ -317,6 +364,9 @@ const rules: Record<string, () => boolean> = {
     return false;
   },
   ENSURE_ROUND_END: () => {
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
     if (is("game_running") && (is("all_guessed") || is("time_up"))) {
       console.log(store.state.value, store.state.context.remainingTime);
       send({ type: "end_round" });
@@ -325,6 +375,9 @@ const rules: Record<string, () => boolean> = {
     return false;
   },
   ENSURE_WORD_CHOSEN: () => {
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
     if (is("word_choosing") && !is("word_choosing_running")) {
       send({ type: "pick_random_word" });
       return true;
@@ -332,11 +385,30 @@ const rules: Record<string, () => boolean> = {
     return false;
   },
   ENSURE_DESTROYED: () => {
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
     if (!is("has_players")) {
       waitFor(5000, () => {
         if (!is("has_players")) {
           send({ type: "remove_room" });
         }
+      });
+      return true;
+    }
+    return false;
+  },
+  ENSURE_NEXT_ROUND: () => {
+    const conn = local.atom.get().conn;
+    if (!conn?.synced) return false;
+
+    // Transition from leaderboard when time is up
+    if (
+      store.state.value === "game.round_ended" &&
+      store.state.context.leaderboard_time <= 0
+    ) {
+      send({
+        type: is("rounds_not_over") ? "start_word_choosing" : "end_game",
       });
       return true;
     }
@@ -358,3 +430,5 @@ export const useGameSyncedStore = () => {
   const me = local.use();
   return { state, send, me, is } as const;
 };
+
+// Global Timer Loop for Robustness
