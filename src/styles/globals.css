@@ -7,8 +7,16 @@
   --primary-darker: #0062cc;
   --primary-lighter: #0062cc;
   --color-1: #66026d;
-  --color-1-2 : #68046f;
+  --color-1-2: #68046f;
   --color-2: #13162c;
+  --background: #13162c;
+  --foreground: #ffffff;
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 input[type="range"] {
@@ -22,33 +30,32 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   background: #053a5f;
   height: 1.3rem;
-  border-radius: 10px
-
+  border-radius: 10px;
 }
-input[type="range"]::-moz-range-track{
+input[type="range"]::-moz-range-track {
   background: #053a5f;
   height: 1.3rem;
-  border-radius: 10px
+  border-radius: 10px;
 }
 ::-webkit-scrollbar {
-    width: 0.25rem;
-    height: 0.5rem;
+  width: 0.25rem;
+  height: 0.5rem;
 }
 
-  /* Track */
-  ::-webkit-scrollbar-track {
-    border-radius: 10px;
-    background-color: rgba( 0, 0, 0, 0.3);
-  }
+/* Track */
+::-webkit-scrollbar-track {
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.3);
+}
 
-  /* Handle */
-  ::-webkit-scrollbar-thumb {
-    border-radius: 10px;
-    background-color: var(--color-1);
-  }
+/* Handle */
+::-webkit-scrollbar-thumb {
+  border-radius: 10px;
+  background-color: var(--color-1);
+}
 
-  /* Handle on hover */
-  ::-webkit-scrollbar-thumb:hover {
-    border-radius: 10px;
-    background-color: var(--color-1-2);
-  }
+/* Handle on hover */
+::-webkit-scrollbar-thumb:hover {
+  border-radius: 10px;
+  background-color: var(--color-1-2);
+}
